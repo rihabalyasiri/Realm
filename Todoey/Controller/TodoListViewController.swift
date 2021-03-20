@@ -7,16 +7,16 @@
 //
 
 import UIKit
-import CoreData
+import RealmSwift
+import ChameleonFramework
 
-class TodoListViewController: UITableViewController {
+class TodoListViewController: SwipeTableViewController {
     
-    var itemArray = [ItemEntity]()
-    //let defaults = UserDefaults.standard
-    // create Database Contex
-    let context = (UIApplication.shared.delegate as! AppDelegate).persistentContainer.viewContext
+    var todoItems: Results<Item>?
     
-    var selectedCategory : CategoryEntity? {
+    let realm = try! Realm()
+    
+    var selectedCategory : Category? {
         didSet {
             loadItems()
         }
@@ -28,21 +28,25 @@ class TodoListViewController: UITableViewController {
         
         // to get path File where SQLite saved
         print(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask))
+        loadItems()
+        
+        
        
     }
     
     // to get the number of needed cells
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        itemArray.count
+        todoItems?.count ?? 1
     }
     
     // to show the content of list on the cells
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "TodoItem", for: indexPath)
-        cell.textLabel?.text = itemArray[indexPath.row].titel
+        let cell = super.tableView(tableView, cellForRowAt: indexPath)
+        cell.textLabel?.text = todoItems?[indexPath.row].title
+        
         
         // to avoid problem with reusable cells
-        if itemArray[indexPath.row].isDone == false {
+        if todoItems?[indexPath.row].isDone == false {
             cell.accessoryType = .none
         }else {
             cell.accessoryType = .checkmark
@@ -53,35 +57,47 @@ class TodoListViewController: UITableViewController {
     // to do action on selcting/clicking the cells
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         // toggle the checkmark as selected
-        itemArray[indexPath.row].isDone = !itemArray[indexPath.row].isDone
+    //    todoItems?[indexPath.row].isDone = !todoItems?[indexPath.row].isDone
+        if let item = todoItems?[indexPath.row] {
+            do {
+                try realm.write({
+                item.isDone = !item.isDone
+            })
+            } catch  {
+                print(error)
+            }
+           
+        }
         
-        //to delete an item
-        // context.delete(itemArray[indexPath.row])
-        //itemArray.remove(at: indexPath.row)
+        tableView.reloadData()
         
-        
-        saveItems()
         // to flash the gray background as user click it
         tableView.deselectRow(at: indexPath, animated: true)
     }
 
     @IBAction func addPressed(_ sender: UIBarButtonItem) {
+        //TODO: hier brecht App ab, weil es nicht normal Cell zu Swipe Cell umwandeln kann
         var textField = UITextField()
         // to create iOS Popup
         let alert = UIAlertController(title: "Add a new Todo", message: "", preferredStyle: .alert)
         let action = UIAlertAction(title: "Add item", style: .default) { (action) in
-            let newItem = ItemEntity(context: self.context)
-            newItem.titel = textField.text!
-            newItem.isDone = false
-            newItem.parentCategory = self.selectedCategory
-            
-            self.itemArray.append(newItem)
-            // save data like in Local Storage to avoid losing data when App terminated
-          //  self.defaults.set(self.itemArray, forKey: "TodoListArray")
-            // to update UI
-            self.saveItems()
-           
+         
+            if let currentCategory = self.selectedCategory {
+             
+                do {
+                    try self.realm.write({
+                        let newItem = Item()
+                        newItem.title = textField.text!
+                        newItem.createDate = Date()
+                        currentCategory.items.append(newItem)
+                    })
+                }catch {
+                    print("Error is\(error)")
+                }
+            }
+            self.tableView.reloadData()
         }
+      
         alert.addTextField { (alertTextField) in
             alertTextField.placeholder = "create new item"
             textField = alertTextField
@@ -93,64 +109,37 @@ class TodoListViewController: UITableViewController {
         present(alert, animated: true, completion: nil)
     }
     
-    func saveItems() {
-        do {
-            try context.save()
-        } catch {
-            print("Error is\(error)")
-        }
+    
+    func loadItems() {
+
+        todoItems = selectedCategory?.items.sorted(byKeyPath: "title", ascending: true)
+
         tableView.reloadData()
     }
     
-    func loadItems(with request: NSFetchRequest<ItemEntity> = ItemEntity.fetchRequest(), with predicate: NSPredicate? = nil) {
-        
-        let categoryPredicate = NSPredicate(format: "parentCategory.name MATCHES %@", selectedCategory!.name!)
-        
-        
-        if let additionPredicate = predicate {
-            let compoundPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [categoryPredicate, additionPredicate])
-            
-            request.predicate = compoundPredicate
-        }else {
-            request.predicate = categoryPredicate
+    override func deleteCell(at indexPath: IndexPath) {
+       if let item = todoItems?[indexPath.row] {
+            do {
+                try realm.write({
+                    realm.delete(item)
+                })
+            } catch  {
+                print(error)
+            }
         }
-        
-    
-        do {
-           itemArray =  try context.fetch(request)
-        } catch  {
-            print(error)
-        }
-        
-        tableView.reloadData()
     }
 }
 
 
 extension TodoListViewController: UISearchBarDelegate {
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-        
-        //create a request each time want to fetch from CoreData
-        let request: NSFetchRequest<ItemEntity> = ItemEntity.fetchRequest()
-        
-        // create query predicate to filter the datain CoreData
-        let predicate = NSPredicate(format: "titel CONTAINS[cd] %@", searchBar.text!)
-        
-        request.predicate = predicate
-        
-        // to put sort rule
-        let sortDescriptor = NSSortDescriptor(key: "titel", ascending: true)
-        
-        request.sortDescriptors = [sortDescriptor]
-        
-        loadItems(with: request,with: predicate)
-        
+        todoItems = todoItems?.filter("title CONTAINS[cd] %@", searchBar.text!).sorted(byKeyPath: "title", ascending: true)
     }
-    
+
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
         if searchBar.text?.count == 0 {
             loadItems()
-            
+
             // to dismiss keyboard and arrow cursor in searchBar after dleteing Text insdide of searchBar
             DispatchQueue.main.async {
                 searchBar.resignFirstResponder()
